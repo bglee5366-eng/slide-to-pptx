@@ -138,6 +138,28 @@ export const analyzeResponseSchema = z.object({ results: z.array(analyzeResultSc
 export type SlideAnalysis = z.infer<typeof slideAnalysisSchema>;
 export type AnalyzeResult = z.infer<typeof analyzeResultSchema>;
 
+/**
+ * Direct JSON input for PPTX generation. `dataUrl` is optional for rebuild
+ * mode; without it, image elements are skipped while text and shapes remain
+ * editable. Background mode requires a data URL for every source.
+ */
+export const pptxJsonSourceSchema = z.object({
+  filename: z.string().min(1).max(255),
+  mimeType: z.enum(["image/png", "image/jpeg"]),
+  dataUrl: z.string().max(30_000_000).optional(),
+  pixelWidth: z.number().int().positive(),
+  pixelHeight: z.number().int().positive(),
+  analysis: slideAnalysisSchema,
+}).strict();
+
+export const pptxJsonPayloadSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  mode: z.enum(["background", "rebuild"]),
+  sources: z.array(pptxJsonSourceSchema).min(1).max(10),
+}).strict();
+
+export type PptxJsonPayload = z.infer<typeof pptxJsonPayloadSchema>;
+
 const objectMetaJson = {
   id: { type: "string" },
   parentId: { type: ["string", "null"] },

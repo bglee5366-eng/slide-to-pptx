@@ -203,6 +203,10 @@ async function addRebuiltElements(slide: PptxGenJS.Slide, source: PptxSource, di
     }
 
     if (element.type === "image") {
+      // Direct JSON rebuild input may intentionally omit source image bytes.
+      // Keep text and shapes editable instead of passing an invalid data URL
+      // to PptxGenJS.
+      if (!source.dataUrl) continue;
       const box = normalizedRectToSlideInches(element.bbox, "image", diagnostics, elementIndex);
       if (!box) continue;
       const cropped = cropPngDataUrl(source.dataUrl, source.pixelWidth, source.pixelHeight, paddedImageCrop(element.bbox, source.pixelWidth, source.pixelHeight));

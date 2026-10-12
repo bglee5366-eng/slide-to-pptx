@@ -95,16 +95,62 @@ Vercel 프로젝트의 Settings → Environment Variables에 다음 값을 서�
 ```env
 AI_PROVIDER=gemini
 GEMINI_API_KEY=발급받은_키
-AI_MODEL=gemini-2.5-flash
+AI_MODEL=gemini-3.8-flash
 AI_TIMEOUT_MS=120000
 AI_RETRY_COUNT=2
-AI_OCR=1
-AI_TEXT_RECHECK=1
+AI_OCR=0
+AI_TEXT_RECHECK=0
+GEMINI_THINKING_LEVEL=low
+GEMINI_MAX_OUTPUT_TOKENS=32768
 ```
 
 `AI_PROVIDER`를 생략해도 `GEMINI_API_KEY` 또는 `GOOGLE_API_KEY`가 있으면 Gemini를 자동 선택합니다. 환경변수 저장 후에는 Vercel에서 새 배포를 실행해야 서버 함수가 새 값을 읽습니다. 키가 브라우저 응답이나 로그에 노출되지 않도록 API route의 서버 환경변수로만 사용합니다.
 
 Gemini가 일시적으로 `503 UNAVAILABLE` 또는 과부하 오류를 반환하면 `AI_RETRY_COUNT`만큼 제한적으로 재시도합니다(기본 2회). 계속 실패하면 잠시 후 다시 시도하거나 Gemini 모델 상태를 확인하세요.
+
+## JSON으로 바로 PPTX 만들기
+
+첫 화면의 `JSON으로 바로 PPTX 만들기` 입력란에 아래 형식의 JSON을 붙여 넣으면 AI 분석과 이미지 업로드 없이 PPTX를 생성할 수 있습니다.
+
+```json
+{
+  "schemaVersion": "1.0",
+  "mode": "rebuild",
+  "sources": [
+    {
+      "filename": "slide-1.png",
+      "mimeType": "image/png",
+      "pixelWidth": 1920,
+      "pixelHeight": 1080,
+      "analysis": {
+        "schemaVersion": "1.0",
+        "title": "예시 슬라이드",
+        "source": { "width": 1920, "height": 1080 },
+        "coordinateSystem": { "type": "normalized", "origin": "top-left", "units": "ratio", "axis": "x-right-y-down" },
+        "regions": [],
+        "elements": [],
+        "warnings": []
+      }
+    }
+  ]
+}
+```
+
+좌표는 원본 이미지 기준 0~1 정규화 좌표를 사용합니다. `mode`는 `rebuild` 또는 `background`이며, `background` 모드에서는 각 source에 원본 이미지의 `dataUrl`을 추가해야 합니다. `dataUrl`이 없으면 `rebuild` 모드에서 텍스트와 도형만 생성하고 이미지 요소는 건너뜁니다. 앱에서 저장한 `slide-analysis.json`도 이 형식으로 저장되므로 그대로 다시 입력할 수 있습니다.
+
+슬라이드 이미지를 AI에 첨부할 때는 다음처럼 요청하세요.
+
+```text
+이 슬라이드 이미지를 편집 가능한 PowerPoint용 JSON으로 변환해줘.
+schemaVersion="1.0", mode="rebuild", sources 배열을 포함하고,
+각 source에는 filename, mimeType, pixelWidth, pixelHeight, analysis를 넣어줘.
+analysis의 좌표는 원본 이미지 기준 0~1 정규화 좌표로 작성하고,
+텍스트·도형·선·표·이미지를 elements에 각각 분리해줘.
+읽을 수 없는 글자는 추측하지 말고 text=null, needsReview=true로 남겨줘.
+설명이나 마크다운 없이 JSON 객체 하나만 반환해줘.
+```
+
+반환된 답변은 코드블록이나 설명 문장을 포함하지 않는 순수 JSON이어야 합니다. 답변 전체를 복사해 UTF-8 인코딩의 `slide-to-pptx.json` 파일로 저장한 뒤 첫 화면의 JSON 파일 선택으로 업로드할 수 있습니다.
 
 재시작 후 터미널에 `Environments: .env.local`이 표시되는지 확인하세요. API 키가 없으면 실제 호출을 하지 않고 설정 방법을 안내하는 오류를 반환합니다. 모든 provider의 최종 응답은 서버에서 동일한 Zod 스키마로 검증합니다.
 

@@ -7,10 +7,48 @@ import type { SlideAnalysis } from "./lib/analysis/schema";
 const MAX_FILES = 10;
 const MAX_FILE_SIZE_MB = 20;
 const MAX_TOTAL_SIZE_MB = 100;
+const MAX_JSON_FILE_SIZE_MB = 30;
 const MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024;
 const MAX_TOTAL_SIZE = MAX_TOTAL_SIZE_MB * 1024 * 1024;
 const ACCEPTED_MIME_TYPES = new Set(["image/png", "image/jpeg"]);
 const ACCEPTED_EXTENSIONS = /\.(png|jpe?g)$/i;
+const JSON_AI_PROMPT = `첨부한 슬라이드 이미지를 편집 가능한 PowerPoint용 JSON으로 변환해줘.
+
+중요: 아래 규칙을 모두 지키고, 설명·주석·마크다운 코드블록 없이 JSON 객체 하나만 반환해줘.
+
+1) 최상위 구조는 반드시 다음과 같아야 해.
+{
+  "schemaVersion": "1.0",
+  "mode": "rebuild",
+  "sources": [{
+    "filename": "slide-1.png",
+    "mimeType": "image/png",
+    "pixelWidth": 원본이미지_픽셀_가로,
+    "pixelHeight": 원본이미지_픽셀_세로,
+    "analysis": {
+      "schemaVersion": "1.0",
+      "title": null,
+      "source": { "width": 원본이미지_픽셀_가로, "height": 원본이미지_픽셀_세로 },
+      "coordinateSystem": { "type": "normalized", "origin": "top-left", "units": "ratio", "axis": "x-right-y-down" },
+      "regions": [],
+      "elements": [],
+      "warnings": []
+    }
+  }]
+}
+
+2) sources는 반드시 배열이고, 이미지 한 장당 source 하나를 만들어줘. filename은 문자열, mimeType은 반드시 image/png 또는 image/jpeg, pixelWidth·pixelHeight는 양의 정수로 작성해줘.
+3) 모든 좌표는 원본 이미지 기준 0~1 정규화 좌표야. bbox는 반드시 {"x": 숫자, "y": 숫자, "width": 숫자, "height": 숫자} 형식이고 x,y는 왼쪽 위, width,height는 크기야. 모든 좌표와 크기는 0 이상 1 이하여야 해.
+4) analysis에는 위에 적힌 키 외의 키를 추가하지 마. regions의 각 항목은 id,type,bbox,parentId,backgroundColor,borderColor,paddingRatio,confidence,needsReview,reviewReason을 모두 포함해줘. region.type은 반드시 slide, title, section, card, panel, table, imageGroup, unknown 중 하나만 사용해. 그룹·컨테이너·배경·header·footer 같은 다른 단어는 사용하지 말고, 해당하지 않으면 panel 또는 unknown을 사용해.
+5) elements는 실제 보이는 모든 텍스트·도형·선·표·이미지를 분리해. 모든 요소에 confidence,needsReview,reviewReason을 포함해.
+6) text 요소는 type,role,text,bbox,style,confidence,needsReview,reviewReason을 모두 포함하고, style에는 fontFamily,fontSizeRatio,bold,italic,color,backgroundColor,alignment를 모두 포함해. 읽을 수 없는 글자는 추측하지 말고 text=null, needsReview=true로 남겨줘.
+7) shape 요소는 type,shapeType,bbox,fillColor,strokeColor,strokeWidthRatio,confidence,needsReview,reviewReason을 모두 포함해. shapeType은 rectangle, roundedRectangle, circle, ellipse, triangle, freeform, unknown 중 하나만 사용해.
+8) line 요소는 type,start,end,color,widthRatio,startArrow,endArrow,confidence,needsReview,reviewReason을 모두 포함해. startArrow와 endArrow는 none,arrow,diamond,oval,stealth,triangle 중 하나로 작성해.
+9) table 요소는 type,bbox,rows,columns,confidence,needsReview,reviewReason을 모두 포함해. text.role은 title, body, subtitle, caption, tableCell, other 중 하나만 사용해.
+10) image 요소는 type,bbox,description,confidence,needsReview,reviewReason을 모두 포함해. 원본 이미지를 JSON에 삽입하지 않아도 되지만, 이미지 영역의 위치와 크기는 반드시 기록해.
+11) 텍스트·도형·선·표·이미지 요소를 생략하지 말고, 원본을 위에서 아래·왼쪽에서 오른쪽으로 다시 대조해 누락 여부를 검수해. 확실하지 않은 값은 추측하지 말고 null과 needsReview=true를 사용해.
+12) 최종 응답은 반드시 JSON.parse()가 바로 성공하는 순수 JSON이어야 해. 백틱 3개로 감싼 json 코드펜스, 설명 문장, trailing comma를 절대 넣지 마.
+13) 이 응답을 그대로 파일로 저장할 수 있도록 JSON 객체만 반환해줘. ChatGPT의 답변을 복사해 파일 이름을 slide-to-pptx.json으로 저장하면 유효한 JSON 파일이 되어야 해. 파일 확장자는 .json이고 UTF-8 텍스트로 저장할 수 있어야 해.`;
 
 type UploadItem = { id: string; file: File; previewUrl: string; width: number; height: number };
 type UploadStatus = "idle" | "validating" | "ready";
@@ -56,8 +94,15 @@ function formatSize(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1,
 function clamp(value: number, min = 0, max = 1) { return Math.min(Math.max(value, min), max); }
 function colorValue(value: string | null | undefined) { return value && /^#[0-9a-f]{6}$/i.test(value) ? value : "#666666"; }
 
+function parsePptxJsonInput(value: string): unknown {
+  const trimmed = value.trim().replace(/^\uFEFF/, "");
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return JSON.parse(fenced?.[1]?.trim() ?? trimmed);
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const jsonFileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [items, setItems] = useState<UploadItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -75,6 +120,9 @@ export default function Home() {
   const [generationMode, setGenerationMode] = useState<"background" | "rebuild">("background");
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>("idle");
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const [jsonInput, setJsonInput] = useState("");
+  const [jsonInputError, setJsonInputError] = useState<string | null>(null);
+  const [jsonPromptCopied, setJsonPromptCopied] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("rebuild");
   const [showAnalysisBounds, setShowAnalysisBounds] = useState(false);
   const [interaction, setInteraction] = useState<Interaction | null>(null);
@@ -232,11 +280,61 @@ export default function Home() {
     } catch (requestError) { setGenerationStatus("idle"); setGenerationError(requestError instanceof Error ? requestError.message : "PPTX 생성에 실패했습니다. 원본 이미지는 보존되어 있습니다."); }
   };
 
+  const generatePptxFromJson = async () => {
+    if (!jsonInput.trim() || generationStatus === "generating") return;
+    setGenerationStatus("generating"); setJsonInputError(null); setGenerationError(null);
+    let payload: unknown;
+    try {
+      payload = parsePptxJsonInput(jsonInput);
+    } catch {
+      setGenerationStatus("idle"); setJsonInputError("JSON 문법을 확인하세요. ```json ... ``` 코드블록은 자동으로 제거하지만, 설명 문장이나 JSON 뒤의 추가 문자는 삭제해야 합니다."); return;
+    }
+    try {
+      const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!response.ok) {
+        const body = await response.text();
+        let message = "PPTX 생성에 실패했습니다.";
+        try { message = (JSON.parse(body) as { error?: { message?: string } }).error?.message ?? message; } catch { /* 서버의 비JSON 오류는 기본 메시지로 표시한다. */ }
+        throw new Error(message);
+      }
+      const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a"); link.href = url; link.download = "slide-to-pptx-json-export.pptx"; link.click(); URL.revokeObjectURL(url); setGenerationStatus("complete");
+    } catch (requestError) {
+      setGenerationStatus("idle"); setJsonInputError(requestError instanceof Error ? requestError.message : "PPTX 생성에 실패했습니다.");
+    }
+  };
+
+  const onJsonFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size === 0 || file.size > MAX_JSON_FILE_SIZE_MB * 1024 * 1024) {
+      setJsonInputError(`JSON 파일은 ${MAX_JSON_FILE_SIZE_MB}MB 이하만 업로드할 수 있습니다.`);
+      return;
+    }
+    try {
+      setJsonInput(await file.text());
+      setJsonInputError(null);
+    } catch {
+      setJsonInputError("JSON 파일을 읽을 수 없습니다.");
+    }
+  };
+
+  const copyJsonPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON_AI_PROMPT);
+      setJsonPromptCopied(true);
+      window.setTimeout(() => setJsonPromptCopied(false), 1800);
+    } catch {
+      setJsonInputError("프롬프트를 자동 복사하지 못했습니다. 화면의 요청문을 직접 복사하세요.");
+    }
+  };
+
   const downloadAnalysisJson = () => {
     if (!items.length) return;
     const payload = {
-      coordinateSystem: { type: "normalized", origin: "top-left", units: "ratio", axis: "x-right-y-down" },
-      results: items.map((item) => ({ itemId: item.id, original: { filename: item.file.name, mimeType: item.file.type, byteSize: item.file.size, width: item.width, height: item.height }, analysis: analysisResults[item.id] ?? null })),
+      schemaVersion: "1.0",
+      mode: "rebuild",
+      sources: items.map((item) => ({ filename: item.file.name, mimeType: item.file.type, pixelWidth: item.width, pixelHeight: item.height, analysis: analysisResults[item.id] })),
     };
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = "slide-analysis.json"; link.click(); URL.revokeObjectURL(url);
@@ -259,7 +357,7 @@ export default function Home() {
 
   return <main className="min-h-screen bg-[#f4f6f8] text-[#15171a]">
     <header className="border-b border-black/5 bg-white"><div className="mx-auto flex max-w-[1500px] items-center justify-between px-5 py-4"><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#173bff] text-sm font-bold text-white">S</span><span className="font-semibold">Slide to PPTX</span></div><div className="flex items-center gap-3 text-xs text-black/45"><span>{items.length}개 슬라이드 · {formatSize(totalSize)}</span><span className="rounded-full bg-[#eef1ff] px-3 py-1 text-[#173bff]">편집기</span></div></div></header>
-    {isEmpty && <section className="mx-auto max-w-3xl px-6 py-24"><div onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop} className={`rounded-3xl border bg-white p-12 text-center shadow-sm ${isDragging ? "border-[#173bff] ring-4 ring-[#dfe5ff]" : "border-dashed border-black/15"}`}><div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#e9edff] text-3xl text-[#173bff]">↥</div><h1 className="mt-6 text-3xl font-semibold">이미지를 올려 편집을 시작하세요</h1><p className="mt-3 text-black/50">PNG, JPG, JPEG · 파일당 {MAX_FILE_SIZE_MB}MB · 최대 {MAX_FILES}장</p><input ref={inputRef} type="file" multiple accept="image/png,image/jpeg,.png,.jpg,.jpeg" onChange={onFileChange} className="hidden" /><button type="button" onClick={() => inputRef.current?.click()} className="mt-8 rounded-xl bg-[#15171a] px-6 py-3 text-sm font-semibold text-white">파일 선택하기</button>{error && <p role="alert" className="mt-5 text-sm text-red-600">{error}</p>}</div></section>}
+    {isEmpty && <section className="mx-auto grid max-w-4xl gap-6 px-6 py-16 lg:grid-cols-2"><div onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop} className={`rounded-3xl border bg-white p-10 text-center shadow-sm ${isDragging ? "border-[#173bff] ring-4 ring-[#dfe5ff]" : "border-dashed border-black/15"}`}><div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#e9edff] text-3xl text-[#173bff]">↥</div><h1 className="mt-6 text-3xl font-semibold">이미지를 올려 편집을 시작하세요</h1><p className="mt-3 text-black/50">PNG, JPG, JPEG · 파일당 {MAX_FILE_SIZE_MB}MB · 최대 {MAX_FILES}장</p><input ref={inputRef} type="file" multiple accept="image/png,image/jpeg,.png,.jpg,.jpeg" onChange={onFileChange} className="hidden" /><button type="button" onClick={() => inputRef.current?.click()} className="mt-8 rounded-xl bg-[#15171a] px-6 py-3 text-sm font-semibold text-white">파일 선택하기</button>{error && <p role="alert" className="mt-5 text-sm text-red-600">{error}</p>}</div><div className="rounded-3xl border border-black/8 bg-white p-8 shadow-sm"><h2 className="text-xl font-semibold">JSON으로 바로 PPTX 만들기</h2><p className="mt-2 text-sm leading-6 text-black/50">AI가 추출한 슬라이드 구조 JSON을 입력하거나 파일로 불러오면 바로 생성합니다.</p><input ref={jsonFileInputRef} type="file" accept="application/json,.json" onChange={(event) => void onJsonFileChange(event)} className="hidden" /><div className="mt-5 flex items-center gap-2"><button type="button" onClick={() => jsonFileInputRef.current?.click()} className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs font-semibold text-black/70 hover:bg-black/5">JSON 파일 선택</button><span className="text-xs text-black/40">최대 {MAX_JSON_FILE_SIZE_MB}MB</span></div><textarea value={jsonInput} onChange={(event) => { setJsonInput(event.target.value); setJsonInputError(null); }} placeholder={'{\n  "schemaVersion": "1.0",\n  "mode": "rebuild",\n  "sources": [ ... ]\n}'} className="mt-3 h-48 w-full rounded-xl border border-black/10 bg-[#fafbfc] px-3 py-3 font-mono text-xs text-black outline-none focus:border-[#173bff]" /><button type="button" onClick={() => void generatePptxFromJson()} disabled={!jsonInput.trim() || generationStatus === "generating"} className="mt-3 w-full rounded-xl bg-[#20b486] px-4 py-3 text-sm font-semibold text-white disabled:opacity-40">{generationStatus === "generating" ? "PPTX 생성 중…" : "JSON으로 PPTX 다운로드"}</button>{jsonInputError && <p role="alert" className="mt-3 text-sm text-red-600">{jsonInputError}</p>}<details className="mt-5 rounded-xl bg-[#f5f7ff] p-4"><summary className="cursor-pointer text-sm font-semibold text-[#173bff]">AI에게 JSON 추출 요청하는 방법</summary><p className="mt-3 text-xs leading-5 text-black/60">아래 요청문에 슬라이드 이미지를 함께 첨부한 뒤, 반환된 JSON을 복사해 `slide-to-pptx.json` 파일로 저장하거나 위 입력란에 붙여 넣으세요.</p><button type="button" onClick={() => void copyJsonPrompt()} className="mt-3 rounded-lg bg-[#173bff] px-3 py-2 text-xs font-semibold text-white">{jsonPromptCopied ? "복사 완료" : "요청문 원클릭 복사"}</button><pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-3 text-[11px] leading-5 text-black/70">{JSON_AI_PROMPT}</pre><p className="mt-3 text-xs leading-5 text-black/50">이미지 객체까지 PPTX에 넣으려면 source에 원본 이미지의 dataUrl을 포함하세요. dataUrl이 없으면 재구성 모드에서 텍스트와 도형만 생성됩니다.</p></details></div></section>}
     {!isEmpty && <div className="mx-auto grid min-h-[calc(100vh-74px)] max-w-[1500px] grid-cols-[240px_minmax(520px,1fr)_300px]">
       <aside className="border-r border-black/8 bg-white p-4"><div className="flex items-center justify-between"><h2 className="font-semibold">슬라이드</h2><button type="button" onClick={() => inputRef.current?.click()} className="rounded-lg bg-[#eef1ff] px-3 py-2 text-xs font-semibold text-[#173bff]">추가</button></div><input ref={inputRef} type="file" multiple accept="image/png,image/jpeg,.png,.jpg,.jpeg" onChange={onFileChange} className="hidden" /><div className="mt-4 space-y-3">{items.map((item, index) => <button key={item.id} type="button" onClick={() => { setSelectedSlideId(item.id); setSelectedElementIndex(null); }} className={`group w-full rounded-xl border p-2 text-left transition ${selectedSlideId === item.id ? "border-[#173bff] bg-[#f0f3ff]" : "border-black/8 hover:border-[#aebaff]"}`}><div className="relative aspect-video overflow-hidden rounded-lg bg-[#eef0f2]"><Image src={item.previewUrl} alt={`${index + 1}번 슬라이드`} fill unoptimized className="object-contain" /><span className="absolute left-2 top-2 rounded-md bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">{index + 1}</span></div><div className="mt-2 flex items-center justify-between"><span className="max-w-[150px] truncate text-xs text-black/60">{item.file.name}</span><span onClick={(event) => { event.stopPropagation(); removeItem(item); }} className="cursor-pointer px-1 text-xs text-black/30 hover:text-red-500">×</span></div></button>)}</div><button type="button" onClick={clearAll} className="mt-6 w-full rounded-lg border border-black/10 px-3 py-2 text-xs text-black/50 hover:bg-black/5">전체 삭제</button></aside>
       <section className="flex min-w-0 flex-col items-center bg-[#edf0f3] p-6"><div className="mb-4 flex w-full max-w-[780px] items-center justify-between"><div><h1 className="font-semibold">{selectedAnalysis?.title ?? "슬라이드 편집"}</h1><p className="mt-1 text-xs text-black/45">객체를 클릭해 선택하고 드래그해 이동하거나 크기를 조절하세요.</p></div><div className="flex items-center gap-2"><button type="button" onClick={undo} disabled={!selectedSlideId || !history[selectedSlideId]?.length} className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs disabled:opacity-30">실행 취소</button><label className="flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2 py-2 text-xs"><input type="checkbox" checked={showAnalysisBounds} onChange={(event) => setShowAnalysisBounds(event.target.checked)} /> 경계</label><select value={previewMode} onChange={(event) => setPreviewMode(event.target.value as PreviewMode)} className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"><option value="rebuild">객체 미리보기</option><option value="background">원본 미리보기</option></select></div></div><div ref={canvasRef} onPointerMove={handlePointerMove} onPointerUp={stopInteraction} onPointerLeave={stopInteraction} onClick={() => setSelectedElementIndex(null)} className="relative aspect-video w-full max-w-[780px] overflow-hidden rounded-xl bg-white shadow-[0_16px_40px_rgba(29,41,57,0.12)]">{selectedSlideId && <Image src={items.find((item) => item.id === selectedSlideId)?.previewUrl ?? ""} alt="선택한 원본 슬라이드" fill unoptimized className={previewMode === "background" ? "object-contain" : "object-contain opacity-10"} />}{previewMode === "rebuild" && selectedAnalysis?.elements.map((element, index) => <EditorElement key={`${selectedSlideId}-${index}`} element={element} index={index} selected={selectedElementIndex === index} onPointerDown={startInteraction} onSelect={() => setSelectedElementIndex(index)} />)}{showAnalysisBounds && selectedAnalysis && <AnalysisDebugOverlay analysis={selectedAnalysis} />}</div>{error && <p role="alert" className="mt-4 w-full max-w-[780px] rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}{analysisError && <p role="alert" className="mt-4 w-full max-w-[780px] rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">{analysisError}</p>}{generationError && <p role="alert" className="mt-4 w-full max-w-[780px] rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{generationError} 원본 이미지와 편집 상태는 보존되어 있습니다.</p>}</section>
