@@ -15,10 +15,16 @@ const height = Number(process.env.REFERENCE_HEIGHT ?? 675);
 form.append("metadata", JSON.stringify([{ id: "reference", width, height }]));
 
 const baseUrl = process.env.APP_URL ?? "http://localhost:3000";
+const startedAt = performance.now();
 const response = await fetch(`${baseUrl}/api/analyze`, { method: "POST", body: form });
-const payload = await response.json();
+const elapsedMs = Math.round(performance.now() - startedAt);
+const responseText = await response.text();
+let payload;
+try { payload = JSON.parse(responseText); } catch { payload = null; }
+console.log(`elapsedMs=${elapsedMs}`);
+console.log(`serverTiming=${response.headers.get("server-timing") ?? "none"}`);
 if (!response.ok) {
-  console.error(JSON.stringify(payload, null, 2));
+  console.error(payload ? JSON.stringify(payload, null, 2) : responseText.slice(0, 500));
   process.exit(1);
 }
 

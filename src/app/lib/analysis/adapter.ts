@@ -71,7 +71,10 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw new AnalysisError("TIMEOUT", "AI 분석 요청 시간이 초과되었습니다.", 504);
-    throw new AnalysisError("PROVIDER", "AI 분석 API에 연결할 수 없습니다.");
+    const rawDetail = error instanceof Error ? error.message : "";
+    const safeDetail = rawDetail.replace(/([?&]key=)[^&\s)]+/gi, "$1[redacted]");
+    const detail = safeDetail ? ` (${safeDetail})` : "";
+    throw new AnalysisError("PROVIDER", `AI 분석 API에 연결할 수 없습니다.${detail}`);
   } finally {
     clearTimeout(timeout);
   }
@@ -598,9 +601,16 @@ async function geminiResponse(input: AnalysisInput, prompt: string, timeoutMs: n
   if (!apiKey) throw new AnalysisError("CONFIGURATION", "GEMINI_API_KEY(Google AI Studio 키) 또는 AI_API_KEY가 Vercel 서버 환경변수에 설정되지 않았습니다.", 503);
   const endpoint = process.env.GEMINI_API_BASE_URL ?? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const base64 = input.imageDataUrl.split(",", 2)[1] ?? "";
+  const isGemini3 = /^gemini-3(?:\.|$)/i.test(model);
+  const generationConfig = {
+    ...(isGemini3 ? {} : { temperature: 0 }),
+    responseMimeType: "application/json",
+    maxOutputTokens: Number(process.env.GEMINI_MAX_OUTPUT_TOKENS ?? 32768),
+    ...(isGemini3 ? { thinkingConfig: { thinkingLevel: process.env.GEMINI_THINKING_LEVEL ?? "low" } } : {}),
+  };
   const response = await fetchWithRetry(`${endpoint}?key=${encodeURIComponent(apiKey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
     contents: [{ role: "user", parts: [{ text: `${prompt}\n파일명: ${input.filename}\n원본 크기: ${input.width}x${input.height}` }, { inlineData: { mimeType: input.mimeType, data: base64 } }] }],
-    generationConfig: { temperature: 0, responseMimeType: "application/json" },
+    generationConfig,
   }) }, timeoutMs);
   const payload = await responseText(response) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
   return payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("");
