@@ -88,6 +88,21 @@ provider, 모델 또는 API 키를 변경한 뒤에는 개발 서버를 재시�
 node_modules\.bin\next.cmd dev -p 3000
 ```
 
+### Vercel 배포 설정
+
+Vercel 프로젝트의 Settings → Environment Variables에 다음 값을 서버 환경변수로 등록하세요. `NEXT_PUBLIC_` 접두사는 붙이지 않습니다.
+
+```env
+AI_PROVIDER=gemini
+GEMINI_API_KEY=발급받은_키
+AI_MODEL=gemini-2.5-flash
+AI_TIMEOUT_MS=60000
+AI_OCR=0
+AI_TEXT_RECHECK=0
+```
+
+`AI_PROVIDER`를 생략해도 `GEMINI_API_KEY` 또는 `GOOGLE_API_KEY`가 있으면 Gemini를 자동 선택합니다. 환경변수 저장 후에는 Vercel에서 새 배포를 실행해야 서버 함수가 새 값을 읽습니다. 키가 브라우저 응답이나 로그에 노출되지 않도록 API route의 서버 환경변수로만 사용합니다.
+
 재시작 후 터미널에 `Environments: .env.local`이 표시되는지 확인하세요. API 키가 없으면 실제 호출을 하지 않고 설정 방법을 안내하는 오류를 반환합니다. 모든 provider의 최종 응답은 서버에서 동일한 Zod 스키마로 검증합니다.
 
 ## 반복 분석할 기준 이미지

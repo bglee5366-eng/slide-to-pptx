@@ -51,7 +51,8 @@ const analysisInstructions = `너는 프레젠테이션 이미지 구조 분석�
 type Provider = "openai-compatible" | "openai" | "gemini" | "claude" | "anthropic" | "local" | "ollama";
 
 function getConfig() {
-  const provider = (process.env.AI_PROVIDER ?? "openai-compatible") as Provider;
+  const configuredProvider = process.env.AI_PROVIDER?.trim().toLowerCase();
+  const provider = (configuredProvider || (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY ? "gemini" : process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY ? "claude" : process.env.LOCAL_AI_BASE_URL ? "local" : "openai-compatible")) as Provider;
   const defaultModel = provider === "gemini" ? "gemini-2.5-flash" : provider === "claude" || provider === "anthropic" ? "claude-sonnet-4-6" : provider === "local" || provider === "ollama" ? "llama3.2-vision" : "gpt-4.1-mini";
   const model = process.env.AI_MODEL ?? defaultModel;
   const timeoutValue = Number(process.env.AI_TIMEOUT_MS ?? 60000);
@@ -572,8 +573,8 @@ export function normalizeReferenceDomainCards(analysis: SlideAnalysis): SlideAna
 }
 
 async function geminiResponse(input: AnalysisInput, prompt: string, timeoutMs: number, model: string) {
-  const apiKey = process.env.GEMINI_API_KEY ?? process.env.AI_API_KEY;
-  if (!apiKey) throw new AnalysisError("CONFIGURATION", "GEMINI_API_KEY 또는 AI_API_KEY가 설정되지 않았습니다.", 503);
+  const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? process.env.AI_API_KEY;
+  if (!apiKey) throw new AnalysisError("CONFIGURATION", "GEMINI_API_KEY(Google AI Studio 키) 또는 AI_API_KEY가 Vercel 서버 환경변수에 설정되지 않았습니다.", 503);
   const endpoint = process.env.GEMINI_API_BASE_URL ?? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const base64 = input.imageDataUrl.split(",", 2)[1] ?? "";
   const response = await fetchWithTimeout(`${endpoint}?key=${encodeURIComponent(apiKey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
@@ -621,7 +622,7 @@ class GeminiAdapter implements AnalysisAdapter {
 class ClaudeAdapter implements AnalysisAdapter {
   async analyze(input: AnalysisInput) {
     const { model, timeoutMs } = getConfig();
-    const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.AI_API_KEY;
+    const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.CLAUDE_API_KEY ?? process.env.AI_API_KEY;
     if (!apiKey) throw new AnalysisError("CONFIGURATION", "ANTHROPIC_API_KEY 또는 AI_API_KEY가 설정되지 않았습니다.", 503);
     const endpoint = process.env.CLAUDE_API_BASE_URL ?? "https://api.anthropic.com/v1/messages";
     const { base64, prompt } = imageParts(input);
