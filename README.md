@@ -97,11 +97,14 @@ AI_PROVIDER=gemini
 GEMINI_API_KEY=발급받은_키
 AI_MODEL=gemini-2.5-flash
 AI_TIMEOUT_MS=120000
+AI_RETRY_COUNT=2
 AI_OCR=1
 AI_TEXT_RECHECK=1
 ```
 
 `AI_PROVIDER`를 생략해도 `GEMINI_API_KEY` 또는 `GOOGLE_API_KEY`가 있으면 Gemini를 자동 선택합니다. 환경변수 저장 후에는 Vercel에서 새 배포를 실행해야 서버 함수가 새 값을 읽습니다. 키가 브라우저 응답이나 로그에 노출되지 않도록 API route의 서버 환경변수로만 사용합니다.
+
+Gemini가 일시적으로 `503 UNAVAILABLE` 또는 과부하 오류를 반환하면 `AI_RETRY_COUNT`만큼 제한적으로 재시도합니다(기본 2회). 계속 실패하면 잠시 후 다시 시도하거나 Gemini 모델 상태를 확인하세요.
 
 재시작 후 터미널에 `Environments: .env.local`이 표시되는지 확인하세요. API 키가 없으면 실제 호출을 하지 않고 설정 방법을 안내하는 오류를 반환합니다. 모든 provider의 최종 응답은 서버에서 동일한 Zod 스키마로 검증합니다.
 

@@ -77,6 +77,27 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
+function retryCount() {
+  const value = Number(process.env.AI_RETRY_COUNT ?? 2);
+  return Number.isInteger(value) ? Math.min(Math.max(value, 0), 3) : 2;
+}
+
+function isTransientProviderStatus(status: number) {
+  return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 529;
+}
+
+async function fetchWithRetry(url: string, init: RequestInit, timeoutMs: number) {
+  const attempts = retryCount() + 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const response = await fetchWithTimeout(url, init, timeoutMs);
+    if (!isTransientProviderStatus(response.status) || attempt === attempts - 1) return response;
+    const retryAfter = Number(response.headers.get("retry-after"));
+    const delayMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 5000) : 750 * (attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new AnalysisError("PROVIDER", "AI 분석 API에 연결할 수 없습니다.");
+}
+
 async function responseText(response: Response) {
   if (!response.ok) {
     const detail = (await response.text()).slice(0, 300);
@@ -577,7 +598,7 @@ async function geminiResponse(input: AnalysisInput, prompt: string, timeoutMs: n
   if (!apiKey) throw new AnalysisError("CONFIGURATION", "GEMINI_API_KEY(Google AI Studio 키) 또는 AI_API_KEY가 Vercel 서버 환경변수에 설정되지 않았습니다.", 503);
   const endpoint = process.env.GEMINI_API_BASE_URL ?? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const base64 = input.imageDataUrl.split(",", 2)[1] ?? "";
-  const response = await fetchWithTimeout(`${endpoint}?key=${encodeURIComponent(apiKey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+  const response = await fetchWithRetry(`${endpoint}?key=${encodeURIComponent(apiKey)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
     contents: [{ role: "user", parts: [{ text: `${prompt}\n파일명: ${input.filename}\n원본 크기: ${input.width}x${input.height}` }, { inlineData: { mimeType: input.mimeType, data: base64 } }] }],
     generationConfig: { temperature: 0, responseMimeType: "application/json" },
   }) }, timeoutMs);
