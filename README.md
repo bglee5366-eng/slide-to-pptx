@@ -96,9 +96,9 @@ Vercel 프로젝트의 Settings → Environment Variables에 다음 값을 서�
 AI_PROVIDER=gemini
 GEMINI_API_KEY=발급받은_키
 AI_MODEL=gemini-2.5-flash
-AI_TIMEOUT_MS=60000
-AI_OCR=0
-AI_TEXT_RECHECK=0
+AI_TIMEOUT_MS=120000
+AI_OCR=1
+AI_TEXT_RECHECK=1
 ```
 
 `AI_PROVIDER`를 생략해도 `GEMINI_API_KEY` 또는 `GOOGLE_API_KEY`가 있으면 Gemini를 자동 선택합니다. 환경변수 저장 후에는 Vercel에서 새 배포를 실행해야 서버 함수가 새 값을 읽습니다. 키가 브라우저 응답이나 로그에 노출되지 않도록 API route의 서버 환경변수로만 사용합니다.
