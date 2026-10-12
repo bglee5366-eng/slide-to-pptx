@@ -117,8 +117,21 @@ export default function Home() {
     formData.append("metadata", JSON.stringify(items.map((item) => ({ id: item.id, width: item.width, height: item.height }))));
     try {
       const response = await fetch("/api/analyze", { method: "POST", body: formData });
-      const payload = await response.json().catch(() => null) as { results?: Array<{ itemId: string; analysis: SlideAnalysis }>; error?: { message?: string } } | null;
-      if (!response.ok) throw new Error(payload?.error?.message ?? "슬라이드 분석 요청에 실패했습니다.");
+      const responseBody = await response.text();
+      const payload = (() => {
+        try {
+          return JSON.parse(responseBody) as { results?: Array<{ itemId: string; analysis: SlideAnalysis }>; error?: { message?: string } };
+        } catch {
+          return null;
+        }
+      })();
+      if (!response.ok) {
+        const fallback = response.status === 504
+          ? "AI 분석 시간이 초과되었습니다. AI_TIMEOUT_MS를 낮추거나 Vercel 함수 실행 시간 제한을 확인하세요."
+          : `슬라이드 분석 요청에 실패했습니다. (HTTP ${response.status})`;
+        throw new Error(payload?.error?.message ?? fallback);
+      }
+      if (!payload) throw new Error("분석 서버가 JSON이 아닌 응답을 반환했습니다. Vercel Function Logs를 확인하세요.");
       if (!payload?.results?.length) throw new Error("AI 분석 결과가 비어 있습니다.");
       const originals = Object.fromEntries(payload.results.map((result) => [result.itemId, result.analysis]));
       setAnalysisResults(originals);

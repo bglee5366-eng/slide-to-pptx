@@ -4,6 +4,10 @@ import { applyOcrTextGeometry } from "@/app/lib/analysis/ocr";
 import { analyzeResponseSchema, AnalyzeResult } from "@/app/lib/analysis/schema";
 
 export const runtime = "nodejs";
+// Gemini 재검수와 선택적 OCR이 같은 요청 안에서 실행될 수 있으므로,
+// Vercel이 기본 실행 시간에 도달하기 전에 요청을 종료하지 않도록 명시한다.
+// 실제 허용 시간은 배포 플랜의 최대치에 의해 제한될 수 있다.
+export const maxDuration = 300;
 
 const MAX_FILES = 10;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
